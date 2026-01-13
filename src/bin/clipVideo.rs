@@ -2,7 +2,7 @@ use clap::{ArgGroup, Parser};
 use std::{path::Path, process::Command};
 
 #[derive(Parser)]
-#[command(group(ArgGroup::new("time").required(true)))]
+#[command(group(ArgGroup::new("time").required(true).multiple(true)))]
 struct Args {
     #[arg(short, long, group = "time")]
     start: Option<String>,
