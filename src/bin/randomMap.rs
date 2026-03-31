@@ -13,11 +13,8 @@ struct Args {
 
 fn main() {
     let args = Args::parse_from(wild::args());
-
     let number_of_draws = args.draws.len() as i64;
-
     let total_source_space = cmd_utils::perm(args.source_space, number_of_draws);
-
     let rejection_bound = total_source_space / args.target_space * args.target_space;
 
     if total_source_space < args.target_space {
@@ -25,13 +22,11 @@ fn main() {
     }
 
     let order_in_source_space = get_perm_order(&args.source_space, &args.draws);
-
     if order_in_source_space >= rejection_bound {
         panic!("Drawn values are out of bounds for mapping");
     }
 
     let final_mapped_value = order_in_source_space % args.target_space + 1;
-
     println!(
         "Drawn values {:?} mapped to <{}>",
         args.draws, final_mapped_value
@@ -46,7 +41,7 @@ fn get_perm_order(source_space: &i64, draws: &Vec<i64>) -> i64 {
     let number_of_draws = draws.len() as i64;
     let mut picked = HashSet::<i64>::new();
     return draws
-        .iter()
+        .into_iter()
         .enumerate()
         .map(|(i, &val)| {
             let res = (val - 1 - picked.iter().filter(|&&x| x < val).count() as i64)
@@ -63,11 +58,27 @@ mod tests {
 
     #[test]
     fn test_get_perm_order() {
-        assert_eq!(get_perm_order(&5, &vec![2, 1, 3]), 12);
-        assert_eq!(get_perm_order(&5, &vec![1, 2, 3]), 0);
-        assert_eq!(get_perm_order(&5, &vec![3, 1, 2]), 24);
-        assert_eq!(get_perm_order(&48, &vec![2, 1]), 47);
-        assert_eq!(get_perm_order(&48, &vec![3, 1]), 94);
-        assert_eq!(get_perm_order(&48, &vec![3, 47]), 139);
+        let mut order = 0;
+        (1i64..=48).for_each(|i| {
+            (1i64..=48).for_each(|j| {
+                if i != j {
+                    assert_eq!(get_perm_order(&48, &vec![i, j]), order);
+                    order += 1;
+                }
+            })
+        });
+        order = 0;
+        (1i64..=48).for_each(|i| {
+            (1i64..=48).for_each(|j| {
+                if i != j {
+                    (1i64..=48).for_each(|k| {
+                        if k != i && k != j {
+                            assert_eq!(get_perm_order(&48, &vec![i, j, k]), order);
+                            order += 1;
+                        }
+                    })
+                }
+            })
+        });
     }
 }
