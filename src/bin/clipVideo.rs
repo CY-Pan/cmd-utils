@@ -1,5 +1,4 @@
 use clap::{ArgGroup, Parser};
-use std::{path::Path, process::Command};
 
 #[derive(Parser)]
 #[command(group(ArgGroup::new("time").required(true).multiple(true)))]
@@ -15,24 +14,20 @@ fn main() {
     let args = Args::parse();
 
     for f in &args.files {
-        let path = Path::new(f);
-        let file_name = path.file_name().unwrap().to_str().unwrap();
-        let mut parent = path.parent().unwrap().to_str().unwrap();
-        if parent == "" {
-            parent = ".";
-        }
+        let output_file =
+            cmd_utils::make_unique_filename(cmd_utils::add_prefix_to_file(f, "clip_"));
 
-        let mut reencode_args = vec!["-i", f];
-        if let Some(start) = &args.start {
-            reencode_args.extend(["-ss", start]);
-        }
-        if let Some(to) = &args.to {
-            reencode_args.extend(["-to", to]);
-        }
-
-        let output_file = format!("{}/clip_{}", parent, file_name);
-        reencode_args.extend(["-c", "copy", &output_file]);
-
-        Command::new("ffmpeg").args(reencode_args).status().unwrap();
+        cmd_utils::reencode_video(
+            f,
+            output_file.to_str().unwrap(),
+            cmd_utils::VideoEncodeInfo {
+                only_copy: true,
+                clip_config: Some(cmd_utils::VideoClipConfig {
+                    from: args.start.clone(),
+                    to: args.to.clone(),
+                }),
+                ..Default::default()
+            },
+        );
     }
 }

@@ -1,47 +1,37 @@
 use clap::Parser;
-use std::{path::Path, process::Command};
 
 #[derive(Parser)]
 struct Args {
     #[arg(short, long)]
-    x: i32,
+    x: u32,
     #[arg(short, long)]
-    y: i32,
+    y: u32,
     #[arg(short, long)]
-    width: i32,
+    width: u32,
     #[arg(short, long)]
-    height: i32,
+    height: u32,
     files: Vec<String>,
 }
 
 fn main() {
     let args = Args::parse();
     for f in &args.files {
-        let path = Path::new(f);
-        let file_name = path.file_name().unwrap().to_str().unwrap();
-        let mut parent = path.parent().unwrap().to_str().unwrap();
-        if parent == "" {
-            parent = ".";
-        }
+        let output_file =
+            cmd_utils::make_unique_filename(cmd_utils::add_prefix_to_file(f, "crop_"));
 
-        let vf_arg = format!("crop={}:{}:{}:{}", args.width, args.height, args.x, args.y);
-
-        let output_file = format!("{}/crop_{}", parent, file_name);
-
-        let reencode_args = vec![
-            "-i",
+        cmd_utils::reencode_video(
             f,
-            "-vf",
-            &vf_arg,
-            "-c:v",
-            if cfg!(target_os = "macos") {
-                "h264_videotoolbox"
-            } else {
-                "h264_nvenc"
+            output_file.to_str().unwrap(),
+            cmd_utils::VideoEncodeInfo {
+                hardware_encode: true,
+                crop_config: Some(cmd_utils::VideoCropConfig {
+                    x: args.x,
+                    y: args.y,
+                    width: args.width,
+                    height: args.height,
+                }),
+                ..Default::default()
             },
-            &output_file,
-        ];
-
-        Command::new("ffmpeg").args(reencode_args).status().unwrap();
+        )
     }
 }
