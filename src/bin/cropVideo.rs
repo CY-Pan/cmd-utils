@@ -1,4 +1,5 @@
 use clap::Parser;
+use cmd_utils::{VideoCropConfig, VideoEncodeInfo};
 
 #[derive(Parser)]
 struct Args {
@@ -22,15 +23,14 @@ fn main() {
         cmd_utils::reencode_video(
             f,
             output_file.to_str().unwrap(),
-            cmd_utils::VideoEncodeInfo {
-                hardware_encode: true,
-                crop_config: Some(cmd_utils::VideoCropConfig {
+            VideoEncodeInfo {
+                crop_config: Some(VideoCropConfig {
                     x: args.x,
                     y: args.y,
                     width: args.width,
                     height: args.height,
                 }),
-                ..Default::default()
+                ..VideoEncodeInfo::hardware_default()
             },
         )
     }

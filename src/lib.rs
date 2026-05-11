@@ -142,6 +142,15 @@ pub struct VideoEncodeInfo {
     pub crop_config: Option<VideoCropConfig>,
 }
 
+impl VideoEncodeInfo {
+    pub fn hardware_default() -> Self {
+        Self {
+            hardware_encode: true,
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct VideoClipConfig {
     pub from: Option<String>,

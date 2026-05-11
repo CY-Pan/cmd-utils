@@ -1,4 +1,5 @@
 use clap::{ArgGroup, Parser};
+use cmd_utils::{VideoClipConfig, VideoEncodeInfo};
 
 #[derive(Parser)]
 #[command(group(ArgGroup::new("time").required(true).multiple(true)))]
@@ -20,9 +21,9 @@ fn main() {
         cmd_utils::reencode_video(
             f,
             output_file.to_str().unwrap(),
-            cmd_utils::VideoEncodeInfo {
+            VideoEncodeInfo {
                 only_copy: true,
-                clip_config: Some(cmd_utils::VideoClipConfig {
+                clip_config: Some(VideoClipConfig {
                     from: args.start.clone(),
                     to: args.to.clone(),
                 }),
