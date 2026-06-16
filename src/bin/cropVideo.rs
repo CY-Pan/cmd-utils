@@ -17,8 +17,10 @@ struct Args {
 fn main() {
     let args = Args::parse();
     for f in &args.files {
-        let output_file =
-            cmd_utils::make_unique_filename(cmd_utils::add_prefix_to_file(f, "crop_"));
+        let output_file = cmd_utils::make_unique_filename(cmd_utils::add_prefix_to_file(
+            cmd_utils::replace_unsupported_video_exts(f),
+            "crop_",
+        ));
 
         cmd_utils::reencode_video(
             f,
