@@ -1,82 +1,58 @@
-use std::process::Command;
+use serde::Deserialize;
+use std::{path::Path, process::Command};
 
-#[derive(Debug, Default)]
-pub struct VideoInfo {
-    pub vcodec: String,
-    pub width: u32,
-    pub height: u32,
-    pub fps: f64,
-    pub duration: f64,
-    pub bitrate: u32,
-    pub pixfmt: String,
-    pub acodec: String,
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct MediaInfo {
+    #[serde(default)]
+    pub streams: Vec<MediaStreamInfo>,
 }
 
-pub fn probe_video(video_path: &str) -> VideoInfo {
-    let v_probe_out = Command::new("ffprobe")
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct MediaStreamInfo {
+    pub codec_type: Option<String>,
+    pub codec_name: Option<String>,
+    pub profile: Option<String>,
+    pub level: Option<i32>,
+    pub time_base: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub pix_fmt: Option<String>,
+    pub r_frame_rate: Option<String>,
+    pub sample_aspect_ratio: Option<String>,
+    pub field_order: Option<String>,
+    pub sample_fmt: Option<String>,
+    pub sample_rate: Option<String>,
+    pub channels: Option<u32>,
+    pub channel_layout: Option<String>,
+}
+
+pub fn probe_media(path: &Path) -> MediaInfo {
+    let output = Command::new("ffprobe")
         .args([
             "-v",
             "error",
-            "-select_streams",
-            "v:0",
             "-show_entries",
-            "stream=codec_name,width,height,pix_fmt,r_frame_rate,duration,bit_rate",
+            "stream=codec_type,codec_name,profile,level,time_base,width,height,pix_fmt,r_frame_rate,sample_aspect_ratio,field_order,sample_fmt,sample_rate,channels,channel_layout",
             "-of",
-            "default=nw=1:nk=1",
-            video_path,
+            "json",
         ])
+        .arg(path)
         .output()
-        .unwrap();
+        .unwrap_or_else(|error| panic!("failed to run ffprobe for <{}>: {error}", path.display()));
 
-    let out_str = String::from_utf8(v_probe_out.stdout).unwrap();
-    let mut lines = out_str.lines();
+    assert!(
+        output.status.success(),
+        "ffprobe failed for <{}>: {}",
+        path.display(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
 
-    let vcodec: String = lines.next().unwrap().parse().unwrap();
-    let width: u32 = lines.next().unwrap().parse().unwrap();
-    let height: u32 = lines.next().unwrap().parse().unwrap();
-    let pixfmt: String = lines.next().unwrap().parse().unwrap();
-
-    let fps: f64 = {
-        let fps: String = lines.next().unwrap().parse().unwrap();
-        let mut line = fps.split('/');
-        let numerator: f64 = line.next().unwrap().parse().unwrap();
-        let denominator: f64 = line.next().unwrap().parse().unwrap();
-        numerator / denominator
-    };
-
-    let duration: f64 = lines.next().unwrap().parse().unwrap();
-    let bitrate: u32 = lines.next().unwrap().parse().unwrap();
-
-    let a_probe_out = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "a:0",
-            "-show_entries",
-            "stream=codec_name",
-            "-of",
-            "default=nw=1:nk=1",
-            video_path,
-        ])
-        .output()
-        .unwrap();
-
-    let acodec = String::from_utf8(a_probe_out.stdout)
-        .unwrap()
-        .trim()
-        .to_string();
-
-    VideoInfo {
-        vcodec,
-        width,
-        height,
-        fps,
-        duration,
-        bitrate,
-        pixfmt,
-        acodec,
-    }
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "failed to parse ffprobe output for <{}>: {error}",
+            path.display()
+        )
+    })
 }
 
 #[derive(Debug, Default)]
@@ -113,9 +89,38 @@ pub struct VideoCropConfig {
     pub height: u32,
 }
 
-pub fn calculate_target_bitrate(video_info: &VideoInfo) -> u32 {
-    ((2e6 * video_info.fps) as u64 * (video_info.width * video_info.height) as u64 / 22_118_400)
-        as u32
+pub fn calculate_target_bitrate(media_info: &MediaInfo) -> u32 {
+    let video_stream = media_info
+        .streams
+        .iter()
+        .find(|stream| stream.codec_type.as_deref() == Some("video"))
+        .expect("cannot calculate target bitrate: no video stream");
+    let width = video_stream
+        .width
+        .expect("cannot calculate target bitrate: video width is missing");
+    let height = video_stream
+        .height
+        .expect("cannot calculate target bitrate: video height is missing");
+    let frame_rate = video_stream
+        .r_frame_rate
+        .as_deref()
+        .expect("cannot calculate target bitrate: video frame rate is missing");
+    let (numerator, denominator) = frame_rate
+        .split_once('/')
+        .expect("cannot calculate target bitrate: invalid video frame rate");
+    let numerator: f64 = numerator
+        .parse()
+        .expect("cannot calculate target bitrate: invalid frame-rate numerator");
+    let denominator: f64 = denominator
+        .parse()
+        .expect("cannot calculate target bitrate: invalid frame-rate denominator");
+    assert!(
+        denominator != 0.0,
+        "cannot calculate target bitrate: frame-rate denominator is zero"
+    );
+    let fps = numerator / denominator;
+
+    ((2e6 * fps) as u64 * (u64::from(width) * u64::from(height)) / (720 * 1280 * 24)) as u32
 }
 
 pub fn reencode_video(infile: &str, outfile: &str, encode_info: VideoEncodeInfo) {
@@ -172,4 +177,62 @@ pub fn reencode_video(infile: &str, outfile: &str, encode_info: VideoEncodeInfo)
     println!("   ffmpeg {}", args.join(" "));
 
     Command::new("ffmpeg").args(args).status().unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stream(codec_type: &str) -> MediaStreamInfo {
+        MediaStreamInfo {
+            codec_type: Some(codec_type.to_string()),
+            codec_name: None,
+            profile: None,
+            level: None,
+            time_base: None,
+            width: None,
+            height: None,
+            pix_fmt: None,
+            r_frame_rate: None,
+            sample_aspect_ratio: None,
+            field_order: None,
+            sample_fmt: None,
+            sample_rate: None,
+            channels: None,
+            channel_layout: None,
+        }
+    }
+
+    #[test]
+    fn media_info_deserializes_ffprobe_streams() {
+        let info: MediaInfo = serde_json::from_str(
+            r#"{"streams":[{"codec_type":"video","width":1920,"height":1080,"r_frame_rate":"30/1"}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(info.streams.len(), 1);
+        assert_eq!(info.streams[0].codec_type.as_deref(), Some("video"));
+        assert_eq!(info.streams[0].width, Some(1920));
+    }
+
+    #[test]
+    fn target_bitrate_uses_first_video_stream() {
+        let mut video = stream("video");
+        video.width = Some(1920);
+        video.height = Some(1080);
+        video.r_frame_rate = Some("30/1".to_string());
+        let media_info = MediaInfo {
+            streams: vec![stream("audio"), video],
+        };
+
+        assert_eq!(calculate_target_bitrate(&media_info), 5_625_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "no video stream")]
+    fn target_bitrate_panics_without_video_stream() {
+        calculate_target_bitrate(&MediaInfo {
+            streams: vec![stream("audio")],
+        });
+    }
 }
