@@ -214,24 +214,22 @@ pub struct VideoCropConfig {
     pub height: u32,
 }
 
-pub fn get_video_stream(media_info: &MediaInfo) -> &MediaStreamInfo {
+pub fn get_video_stream(media_info: &MediaInfo) -> Option<&MediaStreamInfo> {
     media_info
         .streams
         .iter()
         .find(|stream| stream.codec_type.as_deref() == Some("video"))
-        .expect("no video stream")
 }
 
-pub fn get_audio_stream(media_info: &MediaInfo) -> &MediaStreamInfo {
+pub fn get_audio_stream(media_info: &MediaInfo) -> Option<&MediaStreamInfo> {
     media_info
         .streams
         .iter()
         .find(|stream| stream.codec_type.as_deref() == Some("audio"))
-        .expect("no audio stream")
 }
 
 pub fn calculate_target_bitrate(media_info: &MediaInfo) -> u32 {
-    let video_stream = get_video_stream(media_info);
+    let video_stream = get_video_stream(media_info).unwrap();
     let width = video_stream.width;
     let height = video_stream.height;
     let fps = video_stream.fps;
@@ -349,7 +347,7 @@ mod tests {
             streams: vec![stream("audio"), first, second],
         };
 
-        assert_eq!(get_video_stream(&media_info).codec_name, "h264");
+        assert_eq!(get_video_stream(&media_info).unwrap().codec_name, "h264");
     }
 
     #[test]
@@ -362,23 +360,7 @@ mod tests {
             streams: vec![stream("video"), first, second],
         };
 
-        assert_eq!(get_audio_stream(&media_info).codec_name, "aac");
-    }
-
-    #[test]
-    #[should_panic(expected = "no video stream")]
-    fn get_video_stream_panics_without_match() {
-        get_video_stream(&MediaInfo {
-            streams: vec![stream("audio")],
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "no audio stream")]
-    fn get_audio_stream_panics_without_match() {
-        get_audio_stream(&MediaInfo {
-            streams: vec![stream("video")],
-        });
+        assert_eq!(get_audio_stream(&media_info).unwrap().codec_name, "aac");
     }
 
     #[test]
@@ -487,13 +469,5 @@ mod tests {
         };
 
         assert_eq!(calculate_target_bitrate(&media_info), 5_625_000);
-    }
-
-    #[test]
-    #[should_panic(expected = "no video stream")]
-    fn target_bitrate_panics_without_video_stream() {
-        calculate_target_bitrate(&MediaInfo {
-            streams: vec![stream("audio")],
-        });
     }
 }
