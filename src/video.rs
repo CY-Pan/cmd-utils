@@ -90,12 +90,24 @@ pub struct VideoCropConfig {
     pub height: u32,
 }
 
-pub fn calculate_target_bitrate(media_info: &MediaInfo) -> u32 {
-    let video_stream = media_info
+pub fn get_video_stream(media_info: &MediaInfo) -> &MediaStreamInfo {
+    media_info
         .streams
         .iter()
         .find(|stream| stream.codec_type.as_deref() == Some("video"))
-        .expect("cannot calculate target bitrate: no video stream");
+        .expect("no video stream")
+}
+
+pub fn get_audio_stream(media_info: &MediaInfo) -> &MediaStreamInfo {
+    media_info
+        .streams
+        .iter()
+        .find(|stream| stream.codec_type.as_deref() == Some("audio"))
+        .expect("no audio stream")
+}
+
+pub fn calculate_target_bitrate(media_info: &MediaInfo) -> u32 {
+    let video_stream = get_video_stream(media_info);
     let width = video_stream
         .width
         .expect("cannot calculate target bitrate: video width is missing");
@@ -208,6 +220,54 @@ mod tests {
             channels: None,
             channel_layout: None,
         }
+    }
+
+    #[test]
+    fn get_video_stream_returns_first_match() {
+        let mut first = stream("video");
+        first.codec_name = Some("h264".to_string());
+        let mut second = stream("video");
+        second.codec_name = Some("hevc".to_string());
+        let media_info = MediaInfo {
+            streams: vec![stream("audio"), first, second],
+        };
+
+        assert_eq!(
+            get_video_stream(&media_info).codec_name.as_deref(),
+            Some("h264")
+        );
+    }
+
+    #[test]
+    fn get_audio_stream_returns_first_match() {
+        let mut first = stream("audio");
+        first.codec_name = Some("aac".to_string());
+        let mut second = stream("audio");
+        second.codec_name = Some("opus".to_string());
+        let media_info = MediaInfo {
+            streams: vec![stream("video"), first, second],
+        };
+
+        assert_eq!(
+            get_audio_stream(&media_info).codec_name.as_deref(),
+            Some("aac")
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "no video stream")]
+    fn get_video_stream_panics_without_match() {
+        get_video_stream(&MediaInfo {
+            streams: vec![stream("audio")],
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "no audio stream")]
+    fn get_audio_stream_panics_without_match() {
+        get_audio_stream(&MediaInfo {
+            streams: vec![stream("video")],
+        });
     }
 
     #[test]
