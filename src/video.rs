@@ -26,7 +26,8 @@ pub struct MediaStreamInfo {
     pub channel_layout: Option<String>,
 }
 
-pub fn probe_media(path: &Path) -> MediaInfo {
+pub fn probe_media(path: impl AsRef<Path>) -> MediaInfo {
+    let path = path.as_ref();
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -182,6 +183,12 @@ pub fn reencode_video(infile: &str, outfile: &str, encode_info: VideoEncodeInfo)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_media_accepts_string_paths() {
+        let probe = |path: &str| probe_media(path);
+        let _ = probe;
+    }
 
     fn stream(codec_type: &str) -> MediaStreamInfo {
         MediaStreamInfo {
