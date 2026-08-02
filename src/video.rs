@@ -7,7 +7,7 @@ pub struct MediaInfo {
     pub streams: Vec<MediaStreamInfo>,
 }
 
-fn deserialize_optional_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+fn deserialize_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -15,27 +15,63 @@ where
     value
         .map(|value| value.parse().map_err(serde::de::Error::custom))
         .transpose()
+        .map(|value| value.unwrap_or_default())
+}
+
+fn deserialize_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    value
+        .map(|value| value.parse().map_err(serde::de::Error::custom))
+        .transpose()
+        .map(|value| value.unwrap_or_default())
+}
+
+fn deserialize_fps<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(0.0);
+    };
+    let (numerator, denominator) = value.split_once('/').unwrap_or((&value, "1"));
+    let numerator: f64 = numerator.parse().map_err(serde::de::Error::custom)?;
+    let denominator: f64 = denominator.parse().map_err(serde::de::Error::custom)?;
+    if denominator == 0.0 {
+        return Ok(0.0);
+    }
+    Ok(numerator / denominator)
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct MediaStreamInfo {
     pub codec_type: Option<String>,
-    pub codec_name: Option<String>,
+    #[serde(default)]
+    pub codec_name: String,
     pub profile: Option<String>,
     pub level: Option<i32>,
     pub time_base: Option<String>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub pix_fmt: Option<String>,
-    pub r_frame_rate: Option<String>,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default)]
+    pub pix_fmt: String,
+    #[serde(default, rename = "r_frame_rate", deserialize_with = "deserialize_fps")]
+    pub fps: f64,
+    #[serde(default, deserialize_with = "deserialize_f64")]
+    pub duration: f64,
     pub sample_aspect_ratio: Option<String>,
     pub field_order: Option<String>,
     pub sample_fmt: Option<String>,
     pub sample_rate: Option<String>,
     pub channels: Option<u32>,
     pub channel_layout: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_u32")]
-    pub bit_rate: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_u32")]
+    pub bit_rate: u32,
 }
 
 #[derive(Debug, PartialEq)]
@@ -53,7 +89,7 @@ pub fn probe_media(path: impl AsRef<Path>) -> MediaInfo {
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,codec_name,profile,level,time_base,width,height,pix_fmt,r_frame_rate,sample_aspect_ratio,field_order,sample_fmt,sample_rate,channels,channel_layout,bit_rate",
+            "stream=codec_type,codec_name,profile,level,time_base,width,height,pix_fmt,r_frame_rate,duration,sample_aspect_ratio,field_order,sample_fmt,sample_rate,channels,channel_layout,bit_rate",
             "-of",
             "json",
         ])
@@ -104,6 +140,19 @@ pub fn concat_differences(reference: &MediaInfo, candidate: &MediaInfo) -> Vec<S
                     differences.push(StreamDifference {
                         stream_index: Some(stream_index),
                         field: stringify!($field),
+                        expected: expected.$field.to_string(),
+                        actual: actual.$field.to_string(),
+                    });
+                }
+            };
+        }
+
+        macro_rules! compare_optional_field {
+            ($field:ident) => {
+                if expected.$field != actual.$field {
+                    differences.push(StreamDifference {
+                        stream_index: Some(stream_index),
+                        field: stringify!($field),
                         expected: option_text(&expected.$field),
                         actual: option_text(&actual.$field),
                     });
@@ -111,21 +160,21 @@ pub fn concat_differences(reference: &MediaInfo, candidate: &MediaInfo) -> Vec<S
             };
         }
 
-        compare_field!(codec_type);
+        compare_optional_field!(codec_type);
         compare_field!(codec_name);
-        compare_field!(profile);
-        compare_field!(level);
-        compare_field!(time_base);
+        compare_optional_field!(profile);
+        compare_optional_field!(level);
+        compare_optional_field!(time_base);
         compare_field!(width);
         compare_field!(height);
         compare_field!(pix_fmt);
-        compare_field!(r_frame_rate);
-        compare_field!(sample_aspect_ratio);
-        compare_field!(field_order);
-        compare_field!(sample_fmt);
-        compare_field!(sample_rate);
-        compare_field!(channels);
-        compare_field!(channel_layout);
+        compare_field!(fps);
+        compare_optional_field!(sample_aspect_ratio);
+        compare_optional_field!(field_order);
+        compare_optional_field!(sample_fmt);
+        compare_optional_field!(sample_rate);
+        compare_optional_field!(channels);
+        compare_optional_field!(channel_layout);
     }
 
     differences
@@ -183,30 +232,21 @@ pub fn get_audio_stream(media_info: &MediaInfo) -> &MediaStreamInfo {
 
 pub fn calculate_target_bitrate(media_info: &MediaInfo) -> u32 {
     let video_stream = get_video_stream(media_info);
-    let width = video_stream
-        .width
-        .expect("cannot calculate target bitrate: video width is missing");
-    let height = video_stream
-        .height
-        .expect("cannot calculate target bitrate: video height is missing");
-    let frame_rate = video_stream
-        .r_frame_rate
-        .as_deref()
-        .expect("cannot calculate target bitrate: video frame rate is missing");
-    let (numerator, denominator) = frame_rate
-        .split_once('/')
-        .expect("cannot calculate target bitrate: invalid video frame rate");
-    let numerator: f64 = numerator
-        .parse()
-        .expect("cannot calculate target bitrate: invalid frame-rate numerator");
-    let denominator: f64 = denominator
-        .parse()
-        .expect("cannot calculate target bitrate: invalid frame-rate denominator");
+    let width = video_stream.width;
+    let height = video_stream.height;
+    let fps = video_stream.fps;
     assert!(
-        denominator != 0.0,
-        "cannot calculate target bitrate: frame-rate denominator is zero"
+        width > 0,
+        "cannot calculate target bitrate: video width is missing"
     );
-    let fps = numerator / denominator;
+    assert!(
+        height > 0,
+        "cannot calculate target bitrate: video height is missing"
+    );
+    assert!(
+        fps > 0.0,
+        "cannot calculate target bitrate: video frame rate is missing"
+    );
 
     ((2e6 * fps) as u64 * (u64::from(width) * u64::from(height)) / (720 * 1280 * 24)) as u32
 }
@@ -280,54 +320,49 @@ mod tests {
     fn stream(codec_type: &str) -> MediaStreamInfo {
         MediaStreamInfo {
             codec_type: Some(codec_type.to_string()),
-            codec_name: None,
+            codec_name: String::new(),
             profile: None,
             level: None,
             time_base: None,
-            width: None,
-            height: None,
-            pix_fmt: None,
-            r_frame_rate: None,
+            width: 0,
+            height: 0,
+            pix_fmt: String::new(),
+            fps: 0.0,
+            duration: 0.0,
             sample_aspect_ratio: None,
             field_order: None,
             sample_fmt: None,
             sample_rate: None,
             channels: None,
             channel_layout: None,
-            bit_rate: None,
+            bit_rate: 0,
         }
     }
 
     #[test]
     fn get_video_stream_returns_first_match() {
         let mut first = stream("video");
-        first.codec_name = Some("h264".to_string());
+        first.codec_name = "h264".to_string();
         let mut second = stream("video");
-        second.codec_name = Some("hevc".to_string());
+        second.codec_name = "hevc".to_string();
         let media_info = MediaInfo {
             streams: vec![stream("audio"), first, second],
         };
 
-        assert_eq!(
-            get_video_stream(&media_info).codec_name.as_deref(),
-            Some("h264")
-        );
+        assert_eq!(get_video_stream(&media_info).codec_name, "h264");
     }
 
     #[test]
     fn get_audio_stream_returns_first_match() {
         let mut first = stream("audio");
-        first.codec_name = Some("aac".to_string());
+        first.codec_name = "aac".to_string();
         let mut second = stream("audio");
-        second.codec_name = Some("opus".to_string());
+        second.codec_name = "opus".to_string();
         let media_info = MediaInfo {
             streams: vec![stream("video"), first, second],
         };
 
-        assert_eq!(
-            get_audio_stream(&media_info).codec_name.as_deref(),
-            Some("aac")
-        );
+        assert_eq!(get_audio_stream(&media_info).codec_name, "aac");
     }
 
     #[test]
@@ -361,9 +396,9 @@ mod tests {
     #[test]
     fn concat_differences_reports_stream_count_and_codec_changes() {
         let mut reference_video = stream("video");
-        reference_video.codec_name = Some("h264".to_string());
+        reference_video.codec_name = "h264".to_string();
         let mut candidate_video = stream("video");
-        candidate_video.codec_name = Some("hevc".to_string());
+        candidate_video.codec_name = "hevc".to_string();
         let reference = MediaInfo {
             streams: vec![reference_video, stream("audio")],
         };
@@ -390,30 +425,63 @@ mod tests {
     #[test]
     fn media_info_deserializes_ffprobe_streams() {
         let info: MediaInfo = serde_json::from_str(
-            r#"{"streams":[{"codec_type":"video","width":1920,"height":1080,"r_frame_rate":"30/1","bit_rate":"1500000"}]}"#,
+            r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"pix_fmt":"yuv420p","r_frame_rate":"30/1","duration":"12.5","bit_rate":"1500000"}]}"#,
         )
         .unwrap();
 
         assert_eq!(info.streams.len(), 1);
         assert_eq!(info.streams[0].codec_type.as_deref(), Some("video"));
-        assert_eq!(info.streams[0].width, Some(1920));
-        assert_eq!(info.streams[0].bit_rate, Some(1_500_000));
+        assert_eq!(info.streams[0].codec_name, "h264");
+        assert_eq!(info.streams[0].width, 1920);
+        assert_eq!(info.streams[0].height, 1080);
+        assert_eq!(info.streams[0].fps, 30.0);
+        assert_eq!(info.streams[0].duration, 12.5);
+        assert_eq!(info.streams[0].bit_rate, 1_500_000);
+        assert_eq!(info.streams[0].pix_fmt, "yuv420p");
     }
 
     #[test]
-    fn media_info_allows_missing_bit_rate() {
+    fn media_info_exposes_parsed_fps_and_duration() {
+        let info: MediaInfo = serde_json::from_str(
+            r#"{"streams":[{"codec_type":"video","r_frame_rate":"30000/1001","duration":"12.5"}]}"#,
+        )
+        .unwrap();
+        let stream = &info.streams[0];
+
+        assert!((stream.fps - 29.97002997002997).abs() < f64::EPSILON);
+        assert_eq!(stream.duration, 12.5);
+    }
+
+    #[test]
+    fn media_info_treats_undefined_fps_as_zero() {
+        let info: MediaInfo =
+            serde_json::from_str(r#"{"streams":[{"codec_type":"audio","r_frame_rate":"0/0"}]}"#)
+                .unwrap();
+
+        assert_eq!(info.streams[0].fps, 0.0);
+    }
+
+    #[test]
+    fn media_info_defaults_missing_convenience_fields() {
         let info: MediaInfo =
             serde_json::from_str(r#"{"streams":[{"codec_type":"audio"}]}"#).unwrap();
 
-        assert_eq!(info.streams[0].bit_rate, None);
+        let stream = &info.streams[0];
+        assert_eq!(stream.codec_name, "");
+        assert_eq!(stream.width, 0);
+        assert_eq!(stream.height, 0);
+        assert_eq!(stream.fps, 0.0);
+        assert_eq!(stream.duration, 0.0);
+        assert_eq!(stream.bit_rate, 0);
+        assert_eq!(stream.pix_fmt, "");
     }
 
     #[test]
     fn target_bitrate_uses_first_video_stream() {
         let mut video = stream("video");
-        video.width = Some(1920);
-        video.height = Some(1080);
-        video.r_frame_rate = Some("30/1".to_string());
+        video.width = 1920;
+        video.height = 1080;
+        video.fps = 30.0;
         let media_info = MediaInfo {
             streams: vec![stream("audio"), video],
         };
