@@ -7,6 +7,16 @@ pub struct MediaInfo {
     pub streams: Vec<MediaStreamInfo>,
 }
 
+fn deserialize_optional_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    value
+        .map(|value| value.parse().map_err(serde::de::Error::custom))
+        .transpose()
+}
+
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct MediaStreamInfo {
     pub codec_type: Option<String>,
@@ -24,7 +34,8 @@ pub struct MediaStreamInfo {
     pub sample_rate: Option<String>,
     pub channels: Option<u32>,
     pub channel_layout: Option<String>,
-    pub bit_rate: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_u32")]
+    pub bit_rate: Option<u32>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -386,7 +397,15 @@ mod tests {
         assert_eq!(info.streams.len(), 1);
         assert_eq!(info.streams[0].codec_type.as_deref(), Some("video"));
         assert_eq!(info.streams[0].width, Some(1920));
-        assert_eq!(info.streams[0].bit_rate.as_deref(), Some("1500000"));
+        assert_eq!(info.streams[0].bit_rate, Some(1_500_000));
+    }
+
+    #[test]
+    fn media_info_allows_missing_bit_rate() {
+        let info: MediaInfo =
+            serde_json::from_str(r#"{"streams":[{"codec_type":"audio"}]}"#).unwrap();
+
+        assert_eq!(info.streams[0].bit_rate, None);
     }
 
     #[test]
