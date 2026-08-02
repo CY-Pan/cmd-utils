@@ -24,6 +24,15 @@ pub struct MediaStreamInfo {
     pub sample_rate: Option<String>,
     pub channels: Option<u32>,
     pub channel_layout: Option<String>,
+    pub bit_rate: Option<String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct StreamDifference {
+    pub stream_index: Option<usize>,
+    pub field: &'static str,
+    pub expected: String,
+    pub actual: String,
 }
 
 pub fn probe_media(path: impl AsRef<Path>) -> MediaInfo {
@@ -33,7 +42,7 @@ pub fn probe_media(path: impl AsRef<Path>) -> MediaInfo {
             "-v",
             "error",
             "-show_entries",
-            "stream=codec_type,codec_name,profile,level,time_base,width,height,pix_fmt,r_frame_rate,sample_aspect_ratio,field_order,sample_fmt,sample_rate,channels,channel_layout",
+            "stream=codec_type,codec_name,profile,level,time_base,width,height,pix_fmt,r_frame_rate,sample_aspect_ratio,field_order,sample_fmt,sample_rate,channels,channel_layout,bit_rate",
             "-of",
             "json",
         ])
@@ -54,6 +63,61 @@ pub fn probe_media(path: impl AsRef<Path>) -> MediaInfo {
             path.display()
         )
     })
+}
+
+fn option_text<T: ToString>(value: &Option<T>) -> String {
+    value
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "<missing>".to_string())
+}
+
+pub fn concat_differences(reference: &MediaInfo, candidate: &MediaInfo) -> Vec<StreamDifference> {
+    let mut differences = Vec::new();
+
+    if reference.streams.len() != candidate.streams.len() {
+        differences.push(StreamDifference {
+            stream_index: None,
+            field: "stream_count",
+            expected: reference.streams.len().to_string(),
+            actual: candidate.streams.len().to_string(),
+        });
+    }
+
+    for (stream_index, (expected, actual)) in
+        reference.streams.iter().zip(&candidate.streams).enumerate()
+    {
+        macro_rules! compare_field {
+            ($field:ident) => {
+                if expected.$field != actual.$field {
+                    differences.push(StreamDifference {
+                        stream_index: Some(stream_index),
+                        field: stringify!($field),
+                        expected: option_text(&expected.$field),
+                        actual: option_text(&actual.$field),
+                    });
+                }
+            };
+        }
+
+        compare_field!(codec_type);
+        compare_field!(codec_name);
+        compare_field!(profile);
+        compare_field!(level);
+        compare_field!(time_base);
+        compare_field!(width);
+        compare_field!(height);
+        compare_field!(pix_fmt);
+        compare_field!(r_frame_rate);
+        compare_field!(sample_aspect_ratio);
+        compare_field!(field_order);
+        compare_field!(sample_fmt);
+        compare_field!(sample_rate);
+        compare_field!(channels);
+        compare_field!(channel_layout);
+    }
+
+    differences
 }
 
 #[derive(Debug, Default)]
@@ -219,6 +283,7 @@ mod tests {
             sample_rate: None,
             channels: None,
             channel_layout: None,
+            bit_rate: None,
         }
     }
 
@@ -271,15 +336,57 @@ mod tests {
     }
 
     #[test]
+    fn concat_differences_accepts_identical_streams() {
+        let reference = MediaInfo {
+            streams: vec![stream("video")],
+        };
+        let candidate = MediaInfo {
+            streams: vec![stream("video")],
+        };
+
+        assert!(concat_differences(&reference, &candidate).is_empty());
+    }
+
+    #[test]
+    fn concat_differences_reports_stream_count_and_codec_changes() {
+        let mut reference_video = stream("video");
+        reference_video.codec_name = Some("h264".to_string());
+        let mut candidate_video = stream("video");
+        candidate_video.codec_name = Some("hevc".to_string());
+        let reference = MediaInfo {
+            streams: vec![reference_video, stream("audio")],
+        };
+        let candidate = MediaInfo {
+            streams: vec![candidate_video],
+        };
+
+        let differences = concat_differences(&reference, &candidate);
+
+        assert!(differences.iter().any(|difference| {
+            difference.stream_index.is_none()
+                && difference.field == "stream_count"
+                && difference.expected == "2"
+                && difference.actual == "1"
+        }));
+        assert!(differences.iter().any(|difference| {
+            difference.stream_index == Some(0)
+                && difference.field == "codec_name"
+                && difference.expected == "h264"
+                && difference.actual == "hevc"
+        }));
+    }
+
+    #[test]
     fn media_info_deserializes_ffprobe_streams() {
         let info: MediaInfo = serde_json::from_str(
-            r#"{"streams":[{"codec_type":"video","width":1920,"height":1080,"r_frame_rate":"30/1"}]}"#,
+            r#"{"streams":[{"codec_type":"video","width":1920,"height":1080,"r_frame_rate":"30/1","bit_rate":"1500000"}]}"#,
         )
         .unwrap();
 
         assert_eq!(info.streams.len(), 1);
         assert_eq!(info.streams[0].codec_type.as_deref(), Some("video"));
         assert_eq!(info.streams[0].width, Some(1920));
+        assert_eq!(info.streams[0].bit_rate.as_deref(), Some("1500000"));
     }
 
     #[test]
